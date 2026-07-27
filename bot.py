@@ -4,16 +4,16 @@ import asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from flask import Flask, request
+from flask import Flask, jsonify
 import threading
-import time
 
 # Load environment variables
 load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -21,18 +21,19 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 if not BOT_TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set!")
 
-# Initialize Flask app for health check
+# Initialize Flask app for health checks
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def health_check():
-    return "Bot is running!", 200
+    return jsonify({"status": "healthy", "service": "grammar-bot"}), 200
 
 @flask_app.route('/health')
 def health():
-    return {"status": "healthy", "service": "grammar-bot"}, 200
+    return jsonify({"status": "healthy", "service": "grammar-bot"}), 200
 
 # Initialize grammar correction service
 class GrammarCorrector:
@@ -140,9 +141,9 @@ I'm your AI-powered grammar assistant bot. I can help you correct:
 
 📝 Just send me any text and I'll correct it while preserving the original meaning!
 
-🔧 I also support these commands:
-/help - Show this help message
-/about - Learn more about this bot
+🔧 Commands:
+/help - Show help
+/about - About this bot
 
 Let's make your writing better! ✨"""
     
@@ -166,11 +167,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /help - Show this help message
 /about - Learn more about this bot
 
-**Tips:**
-• You can send long messages
-• I can handle multiple sentences
-• Feel free to send any type of text
-
 **Privacy:** Your messages are only processed for correction and not stored."""
     
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -189,9 +185,7 @@ This bot uses advanced AI to help you improve your writing by:
 • Instant corrections
 • No storage of your messages
 
-Made with ❤️ for better communication.
-
-**Feedback:** If you encounter any issues, please let me know!"""
+Made with ❤️ for better communication."""
     
     await update.message.reply_text(about_text, parse_mode='Markdown')
 
@@ -227,24 +221,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 2️⃣ I'll correct the grammar, spelling, and punctuation
 3️⃣ I'll improve clarity while keeping your original meaning
 
-**Tips:**
-• You can send long messages
-• I can handle multiple sentences
-• Feel free to send any type of text
-
 **Privacy:** Your messages are only processed for correction and not stored."""
         await query.edit_message_text(help_text, parse_mode='Markdown')
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
-    if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "❌ An unexpected error occurred. Please try again later."
-        )
 
 def run_flask():
     """Run Flask app for health checks."""
     port = int(os.getenv("PORT", 8080))
+    logger.info(f"Starting Flask server on port {port}")
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 def main():
@@ -252,6 +238,7 @@ def main():
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    logger.info("Flask server started in background thread")
     
     # Create the Application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -271,7 +258,7 @@ def main():
     application.add_error_handler(error_handler)
 
     # Start the bot
-    logger.info("Bot is starting...")
+    logger.info("Bot is starting and polling for updates...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
