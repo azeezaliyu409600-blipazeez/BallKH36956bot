@@ -4,6 +4,9 @@ import asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from flask import Flask, request
+import threading
+import time
 
 # Load environment variables
 load_dotenv()
@@ -20,10 +23,20 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set!")
 
+# Initialize Flask app for health check
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health_check():
+    return "Bot is running!", 200
+
+@flask_app.route('/health')
+def health():
+    return {"status": "healthy", "service": "grammar-bot"}, 200
+
 # Initialize grammar correction service
 class GrammarCorrector:
     def __init__(self):
-        # Try to use OpenAI if available, otherwise fallback to Groq or a basic implementation
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.groq_key = os.getenv("GROQ_API_KEY")
         self.use_openai = False
@@ -51,11 +64,9 @@ class GrammarCorrector:
             logger.warning("No AI API keys found. Using basic correction.")
     
     async def correct_text(self, text: str) -> str:
-        """Correct grammar, spelling, punctuation, and improve clarity."""
         if not text or len(text.strip()) == 0:
             return "Please send me some text to correct!"
         
-        # If AI services are available, use them
         if self.use_openai:
             return await self._correct_with_openai(text)
         elif self.use_groq:
@@ -64,7 +75,6 @@ class GrammarCorrector:
             return self._basic_correction(text)
     
     async def _correct_with_openai(self, text: str) -> str:
-        """Use OpenAI API for correction."""
         try:
             response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -84,7 +94,6 @@ class GrammarCorrector:
             return f"Error: Could not correct text. Please try again later."
     
     async def _correct_with_groq(self, text: str) -> str:
-        """Use Groq API for correction."""
         try:
             response = self.groq_client.chat.completions.create(
                 model="mixtral-8x7b-32768",
@@ -104,28 +113,15 @@ class GrammarCorrector:
             return f"Error: Could not correct text. Please try again later."
     
     def _basic_correction(self, text: str) -> str:
-        """Basic fallback correction using simple rules."""
-        # This is a very basic implementation - for production, you'd want to use
-        # proper NLP libraries or services
-        corrected = text
-        
-        # Fix common punctuation issues
         import re
-        
-        # Fix multiple spaces
+        corrected = text
         corrected = re.sub(r'\s+', ' ', corrected)
-        
-        # Fix spacing after punctuation
         corrected = re.sub(r'([.,!?])([A-Za-z])', r'\1 \2', corrected)
-        
-        # Capitalize first letter of sentences
         sentences = re.split(r'([.!?])\s*', corrected)
         for i in range(0, len(sentences), 2):
             if sentences[i]:
                 sentences[i] = sentences[i][0].upper() + sentences[i][1:] if sentences[i] else ''
-        
         corrected = ''.join(sentences)
-        
         return f"⚠️ Using basic correction mode.\n\n{corrected}"
 
 # Initialize the grammar corrector
@@ -133,7 +129,6 @@ corrector = GrammarCorrector()
 
 # Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /start is issued."""
     user = update.effective_user
     welcome_message = f"""👋 Hello {user.first_name}!
 
@@ -160,7 +155,6 @@ Let's make your writing better! ✨"""
     await update.message.reply_text(welcome_message, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /help is issued."""
     help_text = """📚 **How to use this bot:**
 
 1️⃣ Send me any text message
@@ -182,7 +176,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /about is issued."""
     about_text = """🤖 **About Grammar Assistant Bot**
 
 This bot uses advanced AI to help you improve your writing by:
@@ -203,20 +196,13 @@ Made with ❤️ for better communication.
     await update.message.reply_text(about_text, parse_mode='Markdown')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages and correct them."""
     user_text = update.message.text
-    
-    # Send a typing indicator
     await update.message.chat.send_action(action="typing")
     
     try:
-        # Correct the text
         corrected_text = await corrector.correct_text(user_text)
-        
-        # Send the corrected text
         response = f"📝 **Corrected Version:**\n\n{corrected_text}"
         
-        # Add a footer with stats
         original_length = len(user_text)
         corrected_length = len(corrected_text)
         if corrected_length > 0:
@@ -231,7 +217,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callback queries from inline keyboards."""
     query = update.callback_query
     await query.answer()
     
@@ -251,15 +236,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(help_text, parse_mode='Markdown')
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Log errors and notify user."""
     logger.error(f"Update {update} caused error {context.error}")
     if update and update.effective_message:
         await update.effective_message.reply_text(
             "❌ An unexpected error occurred. Please try again later."
         )
 
+def run_flask():
+    """Run Flask app for health checks."""
+    port = int(os.getenv("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
 def main():
     """Start the bot."""
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
     # Create the Application
     application = Application.builder().token(BOT_TOKEN).build()
 
